@@ -157,6 +157,7 @@ function render() {
       const btn = document.createElement('button');
       btn.textContent = '✕';
       btn.onclick = () => {
+        scannedSet.delete(scannedItems[idx]);
         scannedItems.splice(idx, 1);
         persist();
         render();
@@ -176,19 +177,43 @@ function beep() {
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
-    osc.frequency.value = 880;
-    gain.gain.value = 0.2;
+    osc.frequency.value = 1500;
+    gain.gain.value = 1;
     osc.start();
-    setTimeout(() => { osc.stop(); ctx.close(); }, 120);
+    setTimeout(() => { osc.stop(); ctx.close(); }, 180);
   } catch(e) {}
 }
 
+function errorBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 300;
+    gain.gain.value = 0.8;
+    osc.start();
+    setTimeout(() => { osc.stop(); ctx.close(); }, 250);
+  } catch(e) {}
+}
+
+const scannedSet = new Set(scannedItems);
+
 function onScanSuccess(decodedText) {
   const now = Date.now();
-  if (decodedText === lastCode && now - lastTime < 1500) return;
+  if (decodedText === lastCode && now - lastTime < 1000) return;
   lastCode = decodedText;
   lastTime = now;
 
+  if (scannedSet.has(decodedText)) {
+    errorBeep();
+    statusEl.textContent = 'Уже отсканирован: ' + decodedText.slice(0, 30) + (decodedText.length > 30 ? '...' : '');
+    setTimeout(() => { if (scanning) statusEl.textContent = 'Сканирование активно...'; }, 1200);
+    return;
+  }
+
+  scannedSet.add(decodedText);
   scannedItems.push(decodedText);
   persist();
   render();
@@ -225,6 +250,7 @@ document.getElementById('clearBtn').onclick = () => {
   if (scannedItems.length === 0) return;
   if (confirm('Удалить все ' + scannedItems.length + ' записей?')) {
     scannedItems = [];
+    scannedSet.clear();
     persist();
     render();
   }
