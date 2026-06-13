@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QR Сканер для отправок</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, Roboto, Arial, sans-serif;
+    margin: 0;
+    padding: 16px;
+    background: #f4f4f4;
+    color: #222;
+  }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+  #reader { width: 100%; }
+  input, button, select {
+    font-size: 16px;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid #ccc;
+    width: 100%;
+    margin-top: 6px;
+    box-sizing: border-box;
+  }
+  button {
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    font-weight: 500;
+    cursor: pointer;
+    margin-top: 10px;
+  }
+  button.secondary { background: #6b7280; }
+  button.danger { background: #dc2626; }
+  button:active { opacity: 0.8; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .count {
+    font-size: 32px;
+    font-weight: 700;
+    text-align: center;
+    margin: 8px 0;
+  }
+  .label { font-size: 13px; color: #666; }
+  ul#list {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0;
+    max-height: 250px;
+    overflow-y: auto;
+    border: 1px solid #eee;
+    border-radius: 8px;
+  }
+  ul#list li {
+    padding: 8px 10px;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+    font-family: monospace;
+    word-break: break-all;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  ul#list li:last-child { border-bottom: none; }
+  ul#list li button {
+    width: auto;
+    margin: 0;
+    padding: 4px 8px;
+    background: #dc2626;
+    font-size: 12px;
+  }
+  #status {
+    text-align: center;
+    font-size: 14px;
+    color: #2563eb;
+    min-height: 18px;
+  }
+  .empty { text-align: center; color: #999; padding: 16px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<h1>QR Сканер — отправки</h1>
+
+<div class="card">
+  <div id="reader"></div>
+  <div id="status"></div>
+  <button id="toggleBtn" class="secondary">Запустить камеру</button>
+</div>
+
+<div class="card">
+  <div class="count" id="countDisplay">0</div>
+  <div class="label" style="text-align:center;">отсканировано штук</div>
+</div>
+
+<div class="card">
+  <div class="label">Список (новые сверху)</div>
+  <ul id="list"></ul>
+  <div id="emptyMsg" class="empty">Пока ничего не отсканировано</div>
+</div>
+
+<div class="card">
+  <div class="label">Имя файла для сохранения</div>
+  <input type="text" id="filename" placeholder="например: otpravka_12_06" />
+  <div class="row">
+    <button id="saveBtn">Сохранить в CSV</button>
+    <button id="clearBtn" class="danger">Очистить всё</button>
+  </div>
+  <div class="label" style="margin-top:8px;">Файл сохранится в папку "Загрузки" телефона</div>
+</div>
+
+<script>
+let scannedItems = [];
+let html5QrCode = null;
+let scanning = false;
+let lastCode = null;
+let lastTime = 0;
+
+const listEl = document.getElementById('list');
+const countEl = document.getElementById('countDisplay');
+const emptyMsg = document.getElementById('emptyMsg');
+const statusEl = document.getElementById('status');
+const toggleBtn = document.getElementById('toggleBtn');
+
+// load saved data
+try {
+  const saved = JSON.parse(window.name || '[]');
+  if (Array.isArray(saved)) scannedItems = saved;
+} catch(e) {}
+
+function persist() {
+  window.name = JSON.stringify(scannedItems);
+}
+
+function render() {
+  listEl.innerHTML = '';
+  if (scannedItems.length === 0) {
+    emptyMsg.style.display = 'block';
+  } else {
+    emptyMsg.style.display = 'none';
+    scannedItems.slice().reverse().forEach((item, revIdx) => {
+      const idx = scannedItems.length - 1 - revIdx;
+      const li = document.createElement('li');
+      const span = document.createElement('span');
+      span.textContent = item;
+      const btn = document.createElement('button');
+      btn.textContent = '✕';
+      btn.onclick = () => {
+        scannedItems.splice(idx, 1);
+        persist();
+        render();
+      };
+      li.appendChild(span);
+      li.appendChild(btn);
+      listEl.appendChild(li);
+    });
+  }
+  countEl.textContent = scannedItems.length;
+}
+
+function beep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.value = 0.2;
+    osc.start();
+    setTimeout(() => { osc.stop(); ctx.close(); }, 120);
+  } catch(e) {}
+}
+
+function onScanSuccess(decodedText) {
+  const now = Date.now();
+  if (decodedText === lastCode && now - lastTime < 1500) return;
+  lastCode = decodedText;
+  lastTime = now;
+
+  scannedItems.push(decodedText);
+  persist();
+  render();
+  beep();
+  statusEl.textContent = 'Добавлено: ' + decodedText.slice(0, 30) + (decodedText.length > 30 ? '...' : '');
+  setTimeout(() => { if (scanning) statusEl.textContent = 'Сканирование активно...'; }, 1200);
+}
+
+toggleBtn.onclick = async () => {
+  if (!scanning) {
+    html5QrCode = new Html5Qrcode("reader");
+    try {
+      await html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        onScanSuccess
+      );
+      scanning = true;
+      toggleBtn.textContent = 'Остановить камеру';
+      statusEl.textContent = 'Сканирование активно...';
+    } catch (err) {
+      statusEl.textContent = 'Ошибка камеры: ' + err;
+    }
+  } else {
+    await html5QrCode.stop();
+    html5QrCode.clear();
+    scanning = false;
+    toggleBtn.textContent = 'Запустить камеру';
+    statusEl.textContent = '';
+  }
+};
+
+document.getElementById('clearBtn').onclick = () => {
+  if (scannedItems.length === 0) return;
+  if (confirm('Удалить все ' + scannedItems.length + ' записей?')) {
+    scannedItems = [];
+    persist();
+    render();
+  }
+};
+
+document.getElementById('saveBtn').onclick = () => {
+  if (scannedItems.length === 0) {
+    alert('Список пуст, нечего сохранять');
+    return;
+  }
+  let name = document.getElementById('filename').value.trim();
+  if (!name) {
+    const d = new Date();
+    name = 'scan_' + d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
+  }
+  name = name.replace(/[^a-zA-Z0-9_\-А-Яа-яёЁ]/g, '_');
+
+  const csvContent = scannedItems.join('\n');
+  const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+render();
+</script>
+
+</body>
+</html>
